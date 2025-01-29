@@ -16,15 +16,18 @@ def parse_sas_code(sas_code):
             outputs = line.split('data')[1].split(';')[0].strip().split()
         elif line.startswith('set ') or line.startswith('merge '):
             inputs = line.split()[1:]
+            join_type = 'merge' if 'merge' in line else 'set'
             if outputs:
                 for inp in inputs:
-                    datasets.append((inp.strip(';'), outputs[0]))
+                    datasets.append((inp.strip(';'), outputs[0], join_type))
     return datasets
 
 # Функция для преобразования графа NetworkX в формат Dash Cytoscape.
-def generate_cytoscape_elements(datasets):
+def generate_cytoscape_elements(datasets, root_node="raw_data"):
     graph = nx.DiGraph()
-    graph.add_edges_from(datasets)
+    for dataset in datasets:
+        source, target, join_type = dataset
+        graph.add_edge(source, target, join_type=join_type)
 
     elements = []
 
@@ -32,16 +35,17 @@ def generate_cytoscape_elements(datasets):
     for node in graph.nodes:
         elements.append({"data": {"id": node, "label": node}})
 
-    # Добавляем рёбра.
-    for start, end in graph.edges:
-        elements.append({"data": {"source": start, "target": end}})
+    # Добавляем рёбра с разным цветом и стилем.
+    for start, end, data in graph.edges(data=True):
+        color = "blue" if data["join_type"] == "merge" else "black"
+        width = 2 if data["join_type"] == "merge" else 1
+        elements.append({"data": {"source": start, "target": end}, "style": {"line-color": color, "width": width}})
 
     return elements
 
 # Инициализация Dash приложения.
 server = Flask(__name__)  # Сервер Flask (необязательно, если нужен только Dash).
 app = dash.Dash(__name__, server=server)
-
 
 app = dash.Dash(__name__)  # Создаем приложение Dash
 
@@ -52,6 +56,13 @@ app.layout = html.Div([
             id="sas-code-input",
             placeholder="Вставьте ваш SAS-код сюда...",
             style={"width": "100%", "height": "150px"}
+        ),
+        dcc.Input(
+            id="root-node-input",
+            placeholder="Введите корневой узел (по умолчанию 'raw_data')",
+            type="text",
+            value="raw_data",
+            style={"width": "300px", "margin": "10px"}
         ),
         html.Button("Построить граф", id="generate-graph-button", style={"margin": "10px"}),
         html.Button("Очистить", id="clear-graph-button", style={"margin": "10px"}),
@@ -65,12 +76,12 @@ app.layout = html.Div([
     html.Div([
         cyto.Cytoscape(
             id="cytoscape-graph",
-            layout={"name": "cose"},  # Авто-распределение узлов
-            style={"width": "100%", "height": "85vh"},  # Устанавливаем высоту на 85% от высоты окна
+            layout={"name": "breadthfirst"},  # Иерархия сверху вниз
+            style={"width": "100%", "height": "85vh", "background-color": "#808000"},  # Светлый фон
             elements=[],  # Пустые элементы по умолчанию
             stylesheet=[
-                {"selector": "node", "style": {"label": "data(label)", "background-color": "red", "color": "white"}},
-                {"selector": "edge", "style": {"line-color": "black"}},
+                {"selector": "node", "style": {"label": "data(label)", "background-color": "red", "color": "white", "text-valign": "center"}},
+                {"selector": "edge", "style": {"line-color": "black", "curve-style": "bezier"}},
             ]
         )
     ], style={"height": "100%"})
@@ -80,10 +91,11 @@ app.layout = html.Div([
     Output("cytoscape-graph", "elements"),
     [Input("generate-graph-button", "n_clicks"),
      Input("clear-graph-button", "n_clicks")],
-    State("sas-code-input", "value"),
+    [State("sas-code-input", "value"),
+     State("root-node-input", "value")],
     prevent_initial_call=True
 )
-def update_or_clear_graph(generate_clicks, clear_clicks, sas_code):
+def update_or_clear_graph(generate_clicks, clear_clicks, sas_code, root_node):
     # Определяем, какая кнопка была нажата.
     ctx = callback_context
     if not ctx.triggered:  # Если callback вызван без действия, ничего не делаем.
@@ -94,7 +106,7 @@ def update_or_clear_graph(generate_clicks, clear_clicks, sas_code):
         if not sas_code:
             return []
         datasets = parse_sas_code(sas_code)
-        return generate_cytoscape_elements(datasets)
+        return generate_cytoscape_elements(datasets, root_node=root_node)
 
     elif button_id == "clear-graph-button":  # Если нажата кнопка "Очистить".
         return []
